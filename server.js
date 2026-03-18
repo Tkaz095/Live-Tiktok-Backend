@@ -51,6 +51,8 @@ io.on('connection', (socket) => {
                 totalCoins: 0,
                 viewerCount: 0,
                 likeCount: 0,
+                hostNickname: username,
+                hostFollowers: null,
                 isConnecting: true,
                 chats: []
             };
@@ -58,6 +60,10 @@ io.on('connection', (socket) => {
 
             tiktokConnection.connect().then(state => {
                 streamData.isConnecting = false;
+                const owner = state?.roomInfo?.data?.owner || {};
+                streamData.hostNickname = owner.nickname || username;
+                streamData.hostFollowers = owner.follow_info?.follower_count || null;
+                
                 streamData.viewerCount = state?.viewerCount || state?.roomInfo?.viewerCount || state?.roomInfo?.user_count || 0;
                 streamData.likeCount = state?.likeCount || state?.roomInfo?.likeCount || state?.roomInfo?.like_count || 0;
 
@@ -66,7 +72,9 @@ io.on('connection', (socket) => {
                 // Gửi trạng thái ban đầu tới TOÀN BỘ những ai đang xem room này
                 io.to(username).emit('room_info', {
                     viewerCount: streamData.viewerCount,
-                    likeCount: streamData.likeCount
+                    likeCount: streamData.likeCount,
+                    hostNickname: streamData.hostNickname,
+                    hostFollowers: streamData.hostFollowers
                 });
 
                 // Gửi lịch sử chat
@@ -125,8 +133,13 @@ io.on('connection', (socket) => {
             });
 
             tiktokConnection.on('chat', (data) => {
+                const uniqueId = data.msgId || Math.random().toString(36).substring(7);
+                
+                // Prevent duplicate tracking if TikTok re-polls history internally
+                if (streamData.chats.some(c => c.id === uniqueId)) return;
+
                 const chatMsg = {
-                    id: Math.random().toString(36).substring(7),
+                    id: uniqueId,
                     user: data.nickname || data.user || 'unknown',
                     message: data.comment || data.message || '',
                     avatar: data.profilePictureUrl
@@ -164,7 +177,9 @@ io.on('connection', (socket) => {
             if (!streamData.isConnecting) {
                 io.to(socket.id).emit('room_info', {
                     viewerCount: streamData.viewerCount,
-                    likeCount: streamData.likeCount
+                    likeCount: streamData.likeCount,
+                    hostNickname: streamData.hostNickname,
+                    hostFollowers: streamData.hostFollowers
                 });
                 io.to(socket.id).emit('chat_history', streamData.chats);
             }
