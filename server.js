@@ -1,8 +1,59 @@
 import { createServer } from 'http';
+import express from 'express';
+import swaggerUi from 'swagger-ui-express';
+import swaggerJSDoc from 'swagger-jsdoc';
+import cors from 'cors';
 import { Server } from 'socket.io';
 import { WebcastPushConnection } from 'tiktok-live-connector';
 
-const httpServer = createServer();
+const app = express();
+app.use(cors({ origin: "*" }));
+app.use(express.json());
+
+// Cấu hình Swagger
+const swaggerOptions = {
+    swaggerDefinition: {
+        openapi: '3.0.0',
+        info: {
+            title: 'TikTok Live Monitor API',
+            version: '1.0.0',
+            description: 'Tài liệu API cho TikTok Live Backend. (Lưu ý: Dự án hiện tại chủ yếu dùng Socket.io để giao tiếp thời gian thực. Swagger này để mở rộng các REST API trong tương lai).',
+        },
+        servers: [
+            {
+                url: 'http://localhost:4000',
+            },
+        ],
+    },
+    apis: ['./server.js'], 
+};
+
+const swaggerDocs = swaggerJSDoc(swaggerOptions);
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocs));
+
+/**
+ * @swagger
+ * /api/status:
+ *   get:
+ *     summary: Kiểm tra trạng thái server
+ *     description: Trả về thông tin trạng thái hoạt động của Backend
+ *     responses:
+ *       200:
+ *         description: Trạng thái ok
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: string
+ *                   example: "ok"
+ */
+app.get('/api/status', (req, res) => {
+    res.json({ status: 'ok', uptime: process.uptime() });
+});
+
+const httpServer = createServer(app);
 const io = new Server(httpServer, {
     cors: { origin: "*" }
 });
