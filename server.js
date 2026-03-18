@@ -105,12 +105,21 @@ io.on('connection', (socket) => {
                 hostNickname: username,
                 hostFollowers: null,
                 isConnecting: true,
-                chats: []
+                chats: [],
+                giftCache: {}
             };
             activeTiktokStreams.set(username, streamData);
 
             tiktokConnection.connect().then(state => {
                 streamData.isConnecting = false;
+
+                // Cache thông tin gifts
+                if (state?.availableGifts) {
+                    state.availableGifts.forEach(gift => {
+                        streamData.giftCache[gift.id] = gift;
+                    });
+                }
+
                 const owner = state?.roomInfo?.data?.owner || {};
                 streamData.hostNickname = owner.nickname || username;
                 streamData.hostFollowers = owner.follow_info?.follower_count || null;
@@ -203,25 +212,46 @@ io.on('connection', (socket) => {
             });
 
             tiktokConnection.on('gift', (data) => {
-                const diamondCount = data.diamondCount || (data.gift && data.gift.diamond_count) || 0;
+                const cachedGift = streamData.giftCache[data.giftId] || {};
+
+                const diamondCount = data.diamondCount || data.gift?.diamond_count || cachedGift.diamond_count || 0;
                 const repeatCount = data.repeatCount || 1;
 
                 if (data.giftType !== 1 || data.repeatEnd) {
                     streamData.totalCoins += (diamondCount * repeatCount);
                 }
 
-                // Cung cấp chi tiết ảnh của phần quà và avatar người gửi
-                const giftPictureUrl = data.giftPictureUrl || (data.gift && data.gift.image && data.gift.image.url_list && data.gift.image.url_list[0]) || '';
+                // Cung cấp chi tiết ảnh của phần quà và avatar người gửi bằng multi-layer lookup an toàn
+                const giftName = data.giftName || data.gift?.name || cachedGift.name || 'Unknown Gift';
+                let giftPictureUrl = data.giftPictureUrl 
+                    || data.gift?.image?.url_list?.[0] 
+                    || cachedGift.image?.url_list?.[0] 
+                    || '';
+                
+                // Sửa lỗi: Nếu URL không có http/https, thêm https:// để tránh lỗi render ảnh móp méo bên frontend
+                if (giftPictureUrl && giftPictureUrl.startsWith('//')) {
+                    giftPictureUrl = 'https:' + giftPictureUrl;
+                }
+
+                // Logging logic để dễ debug khi quà bị thiếu thông tin
+                if (!giftPictureUrl || giftName === 'Unknown Gift') {
+                    console.log(`[Gift Map Warning] Thiếu thông tin quà: ID=${data.giftId}, Name=${giftName}, URL_Exists=${!!giftPictureUrl}`);
+                } else {
+                    console.log(`[Gift Map Success] ${data.nickname} tặng ${repeatCount}x ${giftName} (${diamondCount} xu/cái)`);
+                }
                 
                 io.to(username).emit('gift', {
                     user: data.nickname,
-                    avatar: data.profilePictureUrl,    // Avatar của người tặng
-                    giftId: data.giftId,               // ID của quà tặng
-                    giftName: data.giftName || 'Gift', // Tên phần quà (VD: Hoa hồng, Sư tử...)
-                    giftPictureUrl: giftPictureUrl,    // URL hình ảnh của phần quà
-                    count: repeatCount,                // Số lượng quà
-                    diamondCount: diamondCount,        // Giá trị xu của 1 phần quà
-                    totalCoins: streamData.totalCoins  // Tổng xu trên phòng live lúc này
+                    avatar: data.profilePictureUrl,
+                    giftId: data.giftId,
+                    giftName: giftName,
+                    gift_name: giftName, // Để khớp với frontend (data.gift_name)
+                    giftPictureUrl: giftPictureUrl,
+                    icon: giftPictureUrl, // Để khớp với frontend (data.icon)
+                    count: repeatCount,
+                    diamondCount: diamondCount,
+                    diamond_value: diamondCount, // Để khớp với frontend (data.diamond_value)
+                    totalCoins: streamData.totalCoins
                 });
             });
         } 
