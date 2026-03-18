@@ -108,12 +108,18 @@ io.on('connection', (socket) => {
                     streamData.totalCoins += (diamondCount * repeatCount);
                 }
 
+                // Cung cấp chi tiết ảnh của phần quà và avatar người gửi
+                const giftPictureUrl = data.giftPictureUrl || (data.gift && data.gift.image && data.gift.image.url_list && data.gift.image.url_list[0]) || '';
+                
                 io.to(username).emit('gift', {
                     user: data.nickname,
-                    giftName: data.giftName || 'Gift',
-                    count: repeatCount,
-                    diamondCount: diamondCount,
-                    totalCoins: streamData.totalCoins
+                    avatar: data.profilePictureUrl,    // Avatar của người tặng
+                    giftId: data.giftId,               // ID của quà tặng
+                    giftName: data.giftName || 'Gift', // Tên phần quà (VD: Hoa hồng, Sư tử...)
+                    giftPictureUrl: giftPictureUrl,    // URL hình ảnh của phần quà
+                    count: repeatCount,                // Số lượng quà
+                    diamondCount: diamondCount,        // Giá trị xu của 1 phần quà
+                    totalCoins: streamData.totalCoins  // Tổng xu trên phòng live lúc này
                 });
             });
         } 
