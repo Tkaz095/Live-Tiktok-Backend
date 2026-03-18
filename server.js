@@ -51,7 +51,8 @@ io.on('connection', (socket) => {
                 totalCoins: 0,
                 viewerCount: 0,
                 likeCount: 0,
-                isConnecting: true
+                isConnecting: true,
+                chats: []
             };
             activeTiktokStreams.set(username, streamData);
 
@@ -67,6 +68,9 @@ io.on('connection', (socket) => {
                     viewerCount: streamData.viewerCount,
                     likeCount: streamData.likeCount
                 });
+
+                // Gửi lịch sử chat
+                io.to(username).emit('chat_history', streamData.chats);
             }).catch(err => {
                 console.error(`Lỗi kết nối TikTok cho ${username}:`, err);
                 io.to(username).emit('error', 'Không thể kết nối tới TikTok Live (Có thể Live đã tắt hoặc sai ID)');
@@ -77,10 +81,12 @@ io.on('connection', (socket) => {
 
             tiktokConnection.on('error', (err) => {
                 console.error(`[TikTok Error] Lỗi với ${username}:`, err.message || err);
+                io.to(username).emit('tiktok_error', 'Lỗi TikTok Live: ' + (err.message || 'Thử lại sau'));
             });
 
             tiktokConnection.on('disconnected', () => {
                 console.log(`[TikTok Disconnected] Mất kết nối tới ${username}.`);
+                io.to(username).emit('tiktok_disconnected', `Phiên kết nối của ${username} bị ngắt đột ngột từ TikTok`);
             });
 
             tiktokConnection.on('streamEnd', (actionId) => {
@@ -96,11 +102,15 @@ io.on('connection', (socket) => {
             });
 
             tiktokConnection.on('like', (data) => {
-                streamData.likeCount = data.totalLikeCount;
+                if (data.totalLikeCount > 0) {
+                    streamData.likeCount = data.totalLikeCount;
+                } else if (data.likeCount > 0) {
+                    streamData.likeCount += data.likeCount;
+                }
                 io.to(username).emit('like', {
                     user: data.nickname,
                     likeCount: data.likeCount,
-                    totalLikeCount: data.totalLikeCount
+                    totalLikeCount: streamData.likeCount
                 });
             });
 
@@ -115,11 +125,17 @@ io.on('connection', (socket) => {
             });
 
             tiktokConnection.on('chat', (data) => {
-                io.to(username).emit('chat', {
-                    user: data.nickname,
-                    message: data.comment,
+                const chatMsg = {
+                    id: Math.random().toString(36).substring(7),
+                    user: data.nickname || data.user || 'unknown',
+                    message: data.comment || data.message || '',
                     avatar: data.profilePictureUrl
-                });
+                };
+                
+                streamData.chats.unshift(chatMsg);
+                if (streamData.chats.length > 100) streamData.chats.pop();
+
+                io.to(username).emit('chat', chatMsg);
             });
 
             tiktokConnection.on('gift', (data) => {
@@ -150,6 +166,7 @@ io.on('connection', (socket) => {
                     viewerCount: streamData.viewerCount,
                     likeCount: streamData.likeCount
                 });
+                io.to(socket.id).emit('chat_history', streamData.chats);
             }
         }
     });
