@@ -34,7 +34,16 @@ io.on('connection', (socket) => {
         // 1. KIỂM TRA: Nếu Backend chửa kết nối tới TikTok Live này thì tạo mới
         if (!activeTiktokStreams.has(username)) {
             console.log(`[+] Đang khởi tạo kết nối TikTok Live cho: ${username}...`);
-            const tiktokConnection = new WebcastPushConnection(username);
+            const tiktokConnection = new WebcastPushConnection(username, {
+                processInitialData: true,
+                enableExtendedGiftInfo: true,
+                enableWebsocketUpgrade: true,
+                requestPollingIntervalMs: 2000,
+                clientParams: {
+                    "app_language": "vi-VN",
+                    "device_platform": "web"
+                }
+            });
             
             // Lưu trạng thái của phiên Live vào bộ nhớ chung
             const streamData = {
@@ -65,6 +74,19 @@ io.on('connection', (socket) => {
             });
 
             // ====== HỨNG CÁC SỰ KIỆN TỪ TIKTOK VÀ BẮN VÀO ROOM ====== //
+
+            tiktokConnection.on('error', (err) => {
+                console.error(`[TikTok Error] Lỗi với ${username}:`, err.message || err);
+            });
+
+            tiktokConnection.on('disconnected', () => {
+                console.log(`[TikTok Disconnected] Mất kết nối tới ${username}.`);
+            });
+
+            tiktokConnection.on('streamEnd', (actionId) => {
+                console.log(`[TikTok StreamEnd] Phiên live của ${username} đã kết thúc.`);
+                io.to(username).emit('stream_end');
+            });
 
             tiktokConnection.on('member', (data) => {
                 io.to(username).emit('viewer_join', {
