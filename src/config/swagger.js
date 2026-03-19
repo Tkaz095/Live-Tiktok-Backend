@@ -29,6 +29,8 @@ const swaggerOptions = {
         './src/routes/v1/auth.routes.js',
         './src/routes/v1/services.routes.js',
         './src/routes/v1/subscriptions.routes.js',
+        './src/routes/v1/tiktokers.routes.js',
+        './src/routes/v1/streams.routes.js',
         './src/routes/api.js'
     ],
 };
