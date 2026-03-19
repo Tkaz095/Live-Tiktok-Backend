@@ -5,6 +5,7 @@ import servicesRoutes from './v1/services.routes.js';
 import subscriptionsRoutes from './v1/subscriptions.routes.js';
 import tiktokersRoutes from './v1/tiktokers.routes.js';
 import streamsRoutes from './v1/streams.routes.js';
+import liveLogsRoutes from './v1/liveLogs.routes.js';
 // import usersRoutes from './v1/users.routes.js';
 // import dataRoutes from './v1/data.routes.js';
 // import catalogRoutes from './v1/catalog.routes.js';
@@ -44,6 +45,7 @@ router.use('/v1/tiktokers', requireAuth, tiktokersRoutes);
 
 // Endpoint yêu cầu xác thực (API Key hoặc Bearer Token)
 router.use('/v1/streams', requireAuth, streamsRoutes);
+router.use('/v1/live-logs', requireAuth, liveLogsRoutes);
 // router.use('/v1/user', requireAuth, usersRoutes);
 // router.use('/v1/data', requireAuth, dataRoutes);
 // router.use('/v1/catalog', requireAuth, catalogRoutes);

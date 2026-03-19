@@ -31,6 +31,7 @@ const swaggerOptions = {
         './src/routes/v1/subscriptions.routes.js',
         './src/routes/v1/tiktokers.routes.js',
         './src/routes/v1/streams.routes.js',
+        './src/routes/v1/liveLogs.routes.js',
         './src/routes/api.js'
     ],
 };

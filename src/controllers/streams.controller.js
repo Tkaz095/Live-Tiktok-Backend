@@ -68,18 +68,49 @@ export const connectStream = async (req, res) => {
       });
     }
 
-    // 2. Tạo session mới (hoặc cập nhật nếu tồn tại - giả lập)
-    const result = await pool.query(
-      `INSERT INTO live_sessions (tiktoker_id, tiktok_url, status, start_at)
-       VALUES ($1, $2, 'online', NOW())
-       RETURNING *`,
-      [tiktoker_id, tiktok_url]
+    // 2. Kiểm tra xem có phiên nào đang 'online' cho Tiktoker này không
+    // Hoặc có phiên nào mới 'offline' gần đây (trong vòng 1 tiếng) thì "resume" lại
+    const existingSession = await pool.query(
+      `SELECT * FROM live_sessions 
+       WHERE tiktoker_id = $1 
+       AND (status = 'online' OR (status = 'offline' AND end_at > NOW() - INTERVAL '1 hour'))
+       ORDER BY start_at DESC LIMIT 1`,
+      [tiktoker_id]
     );
+
+    let sessionData;
+
+    if (existingSession.rows.length > 0) {
+      const session = existingSession.rows[0];
+      if (session.status === 'offline') {
+        // Resume phiên cũ
+        const updateResult = await pool.query(
+          `UPDATE live_sessions SET status = 'online', end_at = NULL WHERE id = $1 RETURNING *`,
+          [session.id]
+        );
+        sessionData = updateResult.rows[0];
+        console.log(`[Session Resume] Resumed session ${session.id} for tiktoker ${tiktoker_id}`);
+      } else {
+        // Tái sử dụng phiên đang online
+        sessionData = session;
+        console.log(`[Session Reuse] Reusing active session ${session.id} for tiktoker ${tiktoker_id}`);
+      }
+    } else {
+      // Tạo session mới
+      const result = await pool.query(
+        `INSERT INTO live_sessions (tiktoker_id, tiktok_url, status, start_at)
+         VALUES ($1, $2, 'online', NOW())
+         RETURNING *`,
+        [tiktoker_id, tiktok_url]
+      );
+      sessionData = result.rows[0];
+      console.log(`[Session New] Created new session ${sessionData.id} for tiktoker ${tiktoker_id}`);
+    }
 
     res.status(201).json({ 
       success: true, 
       message: 'Kết nối luồng thành công',
-      data: result.rows[0]
+      data: sessionData
     });
   } catch (error) {
     console.error('Lỗi connectStream:', error);
