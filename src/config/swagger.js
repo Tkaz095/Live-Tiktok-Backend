@@ -25,7 +25,12 @@ const swaggerOptions = {
             }
         },
     },
-    apis: ['./src/routes/v1/auth.routes.js'], 
+    apis: [
+        './src/routes/v1/auth.routes.js',
+        './src/routes/v1/services.routes.js',
+        './src/routes/v1/subscriptions.routes.js',
+        './src/routes/api.js'
+    ],
 };
 
 const swaggerDocs = swaggerJSDoc(swaggerOptions);

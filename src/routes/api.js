@@ -1,6 +1,8 @@
 import { Router } from 'express';
 // import { requireAuth } from '../middlewares/auth.middleware.js';
 import authRoutes from './v1/auth.routes.js';
+import servicesRoutes from './v1/services.routes.js';
+import subscriptionsRoutes from './v1/subscriptions.routes.js';
 // import streamsRoutes from './v1/streams.routes.js';
 // import usersRoutes from './v1/users.routes.js';
 // import dataRoutes from './v1/data.routes.js';
@@ -36,6 +38,8 @@ router.get('/status', (req, res) => {
 
 // Endpoint Auth (đăng nhập/đăng ký không yêu cầu xác thực)
 router.use('/v1/auth', authRoutes);
+router.use('/v1/services', servicesRoutes);
+router.use('/v1/subscriptions', subscriptionsRoutes);
 
 // Endpoint yêu cầu xác thực (API Key hoặc Bearer Token)
 // router.use('/v1/streams', requireAuth, streamsRoutes);
