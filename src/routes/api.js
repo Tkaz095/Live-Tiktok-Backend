@@ -1,12 +1,12 @@
 import { Router } from 'express';
-import { requireAuth } from '../middlewares/auth.middleware.js';
+// import { requireAuth } from '../middlewares/auth.middleware.js';
 import authRoutes from './v1/auth.routes.js';
-import streamsRoutes from './v1/streams.routes.js';
-import usersRoutes from './v1/users.routes.js';
-import dataRoutes from './v1/data.routes.js';
-import catalogRoutes from './v1/catalog.routes.js';
-import logsRoutes from './v1/logs.routes.js';
-import adminRoutes from './v1/admin.routes.js';
+// import streamsRoutes from './v1/streams.routes.js';
+// import usersRoutes from './v1/users.routes.js';
+// import dataRoutes from './v1/data.routes.js';
+// import catalogRoutes from './v1/catalog.routes.js';
+// import logsRoutes from './v1/logs.routes.js';
+// import adminRoutes from './v1/admin.routes.js';
 
 const router = Router();
 
@@ -38,11 +38,11 @@ router.get('/status', (req, res) => {
 router.use('/v1/auth', authRoutes);
 
 // Endpoint yêu cầu xác thực (API Key hoặc Bearer Token)
-router.use('/v1/streams', requireAuth, streamsRoutes);
-router.use('/v1/user', requireAuth, usersRoutes);
-router.use('/v1/data', requireAuth, dataRoutes);
-router.use('/v1/catalog', requireAuth, catalogRoutes);
-router.use('/v1/logs', requireAuth, logsRoutes);
-router.use('/v1/admin', requireAuth, adminRoutes);
+// router.use('/v1/streams', requireAuth, streamsRoutes);
+// router.use('/v1/user', requireAuth, usersRoutes);
+// router.use('/v1/data', requireAuth, dataRoutes);
+// router.use('/v1/catalog', requireAuth, catalogRoutes);
+// router.use('/v1/logs', requireAuth, logsRoutes);
+// router.use('/v1/admin', requireAuth, adminRoutes);
 
 export default router;

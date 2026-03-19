@@ -14,8 +14,18 @@ const swaggerOptions = {
                 url: 'http://localhost:4000',
             },
         ],
+        components: {
+            securitySchemes: {
+                BearerAuth: {
+                    type: 'http',
+                    scheme: 'bearer',
+                    bearerFormat: 'JWT',
+                    description: 'Nhập JWT token nhận được sau khi login'
+                }
+            }
+        },
     },
-    apis: ['./src/routes/*.js', './src/routes/**/*.js'], 
+    apis: ['./src/routes/v1/auth.routes.js'], 
 };
 
 const swaggerDocs = swaggerJSDoc(swaggerOptions);
