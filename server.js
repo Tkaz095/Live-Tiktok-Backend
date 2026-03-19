@@ -1,277 +1,52 @@
 import { createServer } from 'http';
-import express from 'express';
-import swaggerUi from 'swagger-ui-express';
-import swaggerJSDoc from 'swagger-jsdoc';
-import cors from 'cors';
 import { Server } from 'socket.io';
-import { WebcastPushConnection } from 'tiktok-live-connector';
+import app from './src/app.js';
+import { dbConnect } from './src/config/db.js';
+import { setupSockets } from './src/sockets/tiktokSocket.js';
 
-const app = express();
-app.use(cors({ origin: "*" }));
-app.use(express.json());
+// Cấu hình kết nối Database
+async function startServer() {
+    try {
+        await dbConnect();
 
-// Cấu hình Swagger
-const swaggerOptions = {
-    swaggerDefinition: {
-        openapi: '3.0.0',
-        info: {
-            title: 'TikTok Live Monitor API',
-            version: '1.0.0',
-            description: 'Tài liệu API cho TikTok Live Backend. (Lưu ý: Dự án hiện tại chủ yếu dùng Socket.io để giao tiếp thời gian thực. Swagger này để mở rộng các REST API trong tương lai).',
-        },
-        servers: [
-            {
-                url: 'http://localhost:4000',
-            },
-        ],
-    },
-    apis: ['./server.js'], 
-};
+        // Tạo HTTP Server từ Express App
+        const httpServer = createServer(app);
 
-const swaggerDocs = swaggerJSDoc(swaggerOptions);
-app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocs));
+        // Khởi tạo Socket.io
+        const io = new Server(httpServer, {
+            cors: { origin: "*" }
+        });
 
-/**
- * @swagger
- * /api/status:
- *   get:
- *     summary: Kiểm tra trạng thái server
- *     description: Trả về thông tin trạng thái hoạt động của Backend
- *     responses:
- *       200:
- *         description: Trạng thái ok
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 status:
- *                   type: string
- *                   example: "ok"
- */
-app.get('/api/status', (req, res) => {
-    res.json({ status: 'ok', uptime: process.uptime() });
-});
+        // Gắn logic xử lý TikTok Socket
+        setupSockets(io);
 
-const httpServer = createServer(app);
-const io = new Server(httpServer, {
-    cors: { origin: "*" }
-});
+        // Lắng nghe cổng 4001
+        const PORT = process.env.PORT || 4001;
+        httpServer.listen(PORT, '0.0.0.0', () => {
+            console.log(`-----------------------------------------`);
+            console.log(`🚀 TikTok Monitor Backend is running!`);
+            console.log(`📡 URL: http://localhost:${PORT}`);
+            console.log(`📚 Swagger Docs: http://localhost:${PORT}/api-docs`);
+            console.log(`-----------------------------------------`);
+        });
 
-// Lưu trữ kết nối TikTok tập trung (Global), tránh bị trùng lặp kết nối và ban IP
-const activeTiktokStreams = new Map();
+        httpServer.on('error', (err) => {
+            console.error('❌ Server error:', err);
+        });
 
-io.on('connection', (socket) => {
-    console.log(`Mới có người kết nối: ${socket.id}`);
-
-    let currentRoom = null;
-
-    socket.on('join', (data) => {
-        const username = data.room.replace('@', ''); // Lấy username sạch
-        
-        // Tránh tình trạng Frontend (như React StrictMode) spam sự kiện join liên tục
-        if (currentRoom === username) return;
-
-        // Nếu client muốn chuyển sang live khác, thoát phòng cũ
-        if (currentRoom) {
-            socket.leave(currentRoom);
-            checkCleanup(currentRoom); // Dọn dẹp kết nối cũ nếu không còn ai xem
-        }
-
-        currentRoom = username;
-        socket.join(username); // Socket tham gia phòng mang tên username
-        console.log(`Socket ${socket.id} bắt đầu theo dõi TikTok Live của: ${username}`);
-
-        // 1. KIỂM TRA: Nếu Backend chửa kết nối tới TikTok Live này thì tạo mới
-        if (!activeTiktokStreams.has(username)) {
-            console.log(`[+] Đang khởi tạo kết nối TikTok Live cho: ${username}...`);
-            const tiktokConnection = new WebcastPushConnection(username, {
-                processInitialData: true,
-                enableExtendedGiftInfo: true,
-                enableWebsocketUpgrade: true,
-                requestPollingIntervalMs: 2000,
-                clientParams: {
-                    "app_language": "vi-VN",
-                    "device_platform": "web"
-                }
-            });
-            
-            // Lưu trạng thái của phiên Live vào bộ nhớ chung
-            const streamData = {
-                connection: tiktokConnection,
-                totalCoins: 0,
-                viewerCount: 0,
-                likeCount: 0,
-                hostNickname: username,
-                hostFollowers: null,
-                isConnecting: true,
-                chats: []
-            };
-            activeTiktokStreams.set(username, streamData);
-
-            tiktokConnection.connect().then(state => {
-                streamData.isConnecting = false;
-                const owner = state?.roomInfo?.data?.owner || {};
-                streamData.hostNickname = owner.nickname || username;
-                streamData.hostFollowers = owner.follow_info?.follower_count || null;
-                
-                streamData.viewerCount = state?.viewerCount || state?.roomInfo?.viewerCount || state?.roomInfo?.user_count || 0;
-                streamData.likeCount = state?.likeCount || state?.roomInfo?.likeCount || state?.roomInfo?.like_count || 0;
-
-                console.log(`Đã vào phòng của ${username}. Đang có ${streamData.viewerCount} người xem, ${streamData.likeCount} tim.`);
-                
-                // Gửi trạng thái ban đầu tới TOÀN BỘ những ai đang xem room này
-                io.to(username).emit('room_info', {
-                    viewerCount: streamData.viewerCount,
-                    likeCount: streamData.likeCount,
-                    hostNickname: streamData.hostNickname,
-                    hostFollowers: streamData.hostFollowers
-                });
-
-                // Gửi lịch sử chat
-                io.to(username).emit('chat_history', streamData.chats);
-            }).catch(err => {
-                console.error(`Lỗi kết nối TikTok cho ${username}:`, err);
-                io.to(username).emit('error', 'Không thể kết nối tới TikTok Live (Có thể Live đã tắt hoặc sai ID)');
-                activeTiktokStreams.delete(username);
-            });
-
-            // ====== HỨNG CÁC SỰ KIỆN TỪ TIKTOK VÀ BẮN VÀO ROOM ====== //
-
-            tiktokConnection.on('error', (err) => {
-                console.error(`[TikTok Error] Lỗi với ${username}:`, err.message || err);
-                io.to(username).emit('tiktok_error', 'Lỗi TikTok Live: ' + (err.message || 'Thử lại sau'));
-            });
-
-            tiktokConnection.on('disconnected', () => {
-                console.log(`[TikTok Disconnected] Mất kết nối tới ${username}.`);
-                io.to(username).emit('tiktok_disconnected', `Phiên kết nối của ${username} bị ngắt đột ngột từ TikTok`);
-            });
-
-            tiktokConnection.on('streamEnd', (actionId) => {
-                console.log(`[TikTok StreamEnd] Phiên live của ${username} đã kết thúc.`);
-                io.to(username).emit('stream_end');
-            });
-
-            tiktokConnection.on('member', (data) => {
-                io.to(username).emit('viewer_join', {
-                    user: data.nickname,
-                    avatar: data.profilePictureUrl
-                });
-            });
-
-            tiktokConnection.on('like', (data) => {
-                if (data.totalLikeCount > 0) {
-                    streamData.likeCount = data.totalLikeCount;
-                } else if (data.likeCount > 0) {
-                    streamData.likeCount += data.likeCount;
-                }
-                io.to(username).emit('like', {
-                    user: data.nickname,
-                    likeCount: data.likeCount,
-                    totalLikeCount: streamData.likeCount
-                });
-            });
-
-            tiktokConnection.on('roomUser', (data) => {
-                const vCount = data.viewerCount || data.userCount || 0;
-                if (vCount > 0) {
-                    streamData.viewerCount = vCount;
-                    io.to(username).emit('viewer_count', {
-                        viewerCount: vCount
-                    });
-                }
-            });
-
-            tiktokConnection.on('chat', (data) => {
-                const uniqueId = data.msgId || Math.random().toString(36).substring(7);
-                
-                // Prevent duplicate tracking if TikTok re-polls history internally
-                if (streamData.chats.some(c => c.id === uniqueId)) return;
-
-                const chatMsg = {
-                    id: uniqueId,
-                    user: data.nickname || data.user || 'unknown',
-                    message: data.comment || data.message || '',
-                    avatar: data.profilePictureUrl
-                };
-                
-                streamData.chats.unshift(chatMsg);
-                if (streamData.chats.length > 100) streamData.chats.pop();
-
-                io.to(username).emit('chat', chatMsg);
-            });
-
-            tiktokConnection.on('gift', (data) => {
-                const diamondCount = data.diamondCount || (data.gift && data.gift.diamond_count) || 0;
-                const repeatCount = data.repeatCount || 1;
-
-                if (data.giftType !== 1 || data.repeatEnd) {
-                    streamData.totalCoins += (diamondCount * repeatCount);
-                }
-
-                // Cung cấp chi tiết ảnh của phần quà và avatar người gửi
-                const giftPictureUrl = data.giftPictureUrl || (data.gift && data.gift.image && data.gift.image.url_list && data.gift.image.url_list[0]) || '';
-                
-                io.to(username).emit('gift', {
-                    user: data.nickname,
-                    avatar: data.profilePictureUrl,    // Avatar của người tặng
-                    giftId: data.giftId,               // ID của quà tặng
-                    giftName: data.giftName || 'Gift', // Tên phần quà (VD: Hoa hồng, Sư tử...)
-                    giftPictureUrl: giftPictureUrl,    // URL hình ảnh của phần quà
-                    count: repeatCount,                // Số lượng quà
-                    diamondCount: diamondCount,        // Giá trị xu của 1 phần quà
-                    totalCoins: streamData.totalCoins  // Tổng xu trên phòng live lúc này
-                });
-            });
-        } 
-        // 2. NẾU ĐÃ CÓ KẾT NỐI: Tức là client khác đã mở Live này trước đó
-        else {
-            console.log(`[*] Tái sử dụng kết nối TikTok Live cho: ${username}.`);
-            const streamData = activeTiktokStreams.get(username);
-            
-            // Nếu stream đã connect xong, bắn trạng thái ngay lập tức cho người mới vào phòng
-            if (!streamData.isConnecting) {
-                io.to(socket.id).emit('room_info', {
-                    viewerCount: streamData.viewerCount,
-                    likeCount: streamData.likeCount,
-                    hostNickname: streamData.hostNickname,
-                    hostFollowers: streamData.hostFollowers
-                });
-                io.to(socket.id).emit('chat_history', streamData.chats);
-            }
-        }
-    });
-
-    socket.on('disconnect', () => {
-        console.log(`Đã thoát kết nối: ${socket.id}`);
-        if (currentRoom) {
-            checkCleanup(currentRoom);
-        }
-    });
-
-    // Hàm kiểm tra xem còn Client nào xem phiên Live này không, nếu không thì kết thúc
-    function checkCleanup(roomName) {
-        // Delay 1 chút để tránh trường hợp người dùng vừa bấm F5 bị sập stream ngay
-        setTimeout(() => {
-            const roomData = io.sockets.adapter.rooms.get(roomName);
-            const clientsCount = roomData ? roomData.size : 0;
-            
-            if (clientsCount === 0 && activeTiktokStreams.has(roomName)) {
-                console.log(`[-] Không còn ai xem ${roomName}. Đang đóng kết nối TikTok stream nhằm tiết kiệm RAM...`);
-                const streamData = activeTiktokStreams.get(roomName);
-                if (streamData && streamData.connection) {
-                    streamData.connection.disconnect();
-                }
-                activeTiktokStreams.delete(roomName);
-            }
-        }, 3000); // Đợi 3 giây trước khi thực sự ngắt (tăng thời gian đệm F5)
+    } catch (err) {
+        console.error('❌ Failed to start server:', err);
+        process.exit(1);
     }
+}
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
 });
 
-httpServer.listen(4000, () => {
-    console.log(`-----------------------------------------`);
-    console.log(`🚀 TikTok Monitor Backend is running!`);
-    console.log(`📡 URL: http://localhost:${4000}`);
-    console.log(`-----------------------------------------`);
+process.on('uncaughtException', (err) => {
+    console.error('Uncaught Exception:', err);
+    process.exit(1);
 });
+
+startServer();
