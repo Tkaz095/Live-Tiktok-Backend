@@ -1,5 +1,6 @@
 import { WebcastPushConnection } from 'tiktok-live-connector';
 import * as liveLogsService from '../services/liveLogs.service.js';
+import * as fileLogger from '../services/fileLogger.service.js';
 import pool from '../config/db.js';
 
 export const setupSockets = (io) => {
@@ -56,9 +57,23 @@ export const setupSockets = (io) => {
                     chats: [],
                     giftCache: {},
                     sessionIds: new Set(), // Bộ sưu tập sessionId đang theo dõi room này
-                    chatCount: 0 // Tổng số chat (Baseline DB + Real-time)
+                    chatCount: 0, // Tổng số chat (Baseline DB + Real-time)
+                    sessionPaths: new Map() // sessionId -> dataStoragePath
                 };
-                if (sessionId) streamData.sessionIds.add(sessionId);
+                if (sessionId) {
+                    streamData.sessionIds.add(sessionId);
+                    // Fetch storage path for this session
+                    pool.query(`
+                        SELECT a.data_storage_path 
+                        FROM live_sessions ls
+                        JOIN tiktokers t ON t.id = ls.tiktoker_id
+                        JOIN accounts a ON a.id = t.account_id
+                        WHERE ls.id = $1
+                    `, [sessionId]).then(res => {
+                        const path = res.rows[0]?.data_storage_path;
+                        if (path) streamData.sessionPaths.set(sessionId, path);
+                    }).catch(e => console.error('[DB Error] Fetch storage path error:', e.message));
+                }
                 activeTiktokStreams.set(username, streamData);
 
                 // Hàm kết nối TikTok với baseline từ DB
@@ -102,6 +117,7 @@ export const setupSockets = (io) => {
 
                         const owner = state?.roomInfo?.data?.owner || {};
                         streamData.hostNickname = owner.nickname || username;
+                        streamData.hostAvatar = owner.avatar_thumb?.url_list?.[0] || null;
                         streamData.hostFollowers = owner.follow_info?.follower_count || null;
                         
                         // Chỉ lấy viewerCount từ TikTok, KHÔNG ghi đè likeCount (đã có từ DB baseline)
@@ -115,12 +131,22 @@ export const setupSockets = (io) => {
                         
                         if (roomId && streamData.sessionIds.size > 0) {
                             const sessionIdsBatch = Array.from(streamData.sessionIds);
+                            
+                            // 1. Cập nhật session room_id
                             pool.query(
                                 `UPDATE live_sessions 
                                  SET room_id = $1, live_title = $2 
                                  WHERE id = ANY($3::int[])`,
                                 [roomId, liveTitle, sessionIdsBatch]
                             ).catch(dbErr => console.error('[DB Error] Cập nhật session info thất bại:', dbErr));
+
+                            // 2. Cập nhật thông tin Tiktoker (Avatar & Nickname thật)
+                            pool.query(
+                                `UPDATE tiktokers 
+                                 SET nickname = $1, avatar_url = $2 
+                                 WHERE tiktok_handle = $3`,
+                                [streamData.hostNickname, streamData.hostAvatar, username]
+                            ).catch(dbErr => console.error('[DB Error] Cập nhật Tiktoker info thất bại:', dbErr));
                         }
 
                         console.log(`Đã vào phòng của ${username}. Đang có ${streamData.viewerCount} người xem, ${streamData.likeCount} tim.`);
@@ -132,6 +158,7 @@ export const setupSockets = (io) => {
                             totalCoins: streamData.totalCoins,
                             chatCount: streamData.chatCount,
                             hostNickname: streamData.hostNickname,
+                            hostAvatar: streamData.hostAvatar,
                             hostFollowers: streamData.hostFollowers
                         });
 
@@ -179,6 +206,12 @@ export const setupSockets = (io) => {
                             content: 'vừa vào phòng',
                             json_raw: data
                         }).catch(e => console.error(`[Logging Error] Member for sid ${sid}:`, e.message));
+
+                        // Log to local file if path exists
+                        const storagePath = streamData.sessionPaths.get(sid);
+                        if (storagePath) {
+                            fileLogger.saveLogToFile(storagePath, sid, 'member', { sender_name: nickname, content: 'vừa vào phòng', raw: data });
+                        }
                     });
                 });
 
@@ -205,6 +238,12 @@ export const setupSockets = (io) => {
                                 quantity: data.likeCount,
                                 json_raw: data
                             }).catch(e => console.error(`[Logging Error] Like for sid ${sid}:`, e.message));
+
+                            // Log to local file if path exists
+                            const storagePath = streamData.sessionPaths.get(sid);
+                            if (storagePath) {
+                                fileLogger.saveLogToFile(storagePath, sid, 'like', { sender_name: data.nickname, content: `đã thả ${data.likeCount} tim`, quantity: data.likeCount, raw: data });
+                            }
                         });
                     }
                 });
@@ -251,6 +290,12 @@ export const setupSockets = (io) => {
                             content: chatMsg.message,
                             json_raw: data
                         }).catch(e => console.error(`[Logging Error] Chat for sid ${sid}:`, e.message));
+
+                        // Log to local file if path exists
+                        const storagePath = streamData.sessionPaths.get(sid);
+                        if (storagePath) {
+                            fileLogger.saveLogToFile(storagePath, sid, 'chat', { sender_name: chatMsg.user, content: chatMsg.message, raw: data });
+                        }
                     });
                 });
 
@@ -309,6 +354,12 @@ export const setupSockets = (io) => {
                                 quantity: repeatCount,
                                 json_raw: data
                             }).catch(e => console.error(`[Logging Error] Gift for sid ${sid}:`, e.message));
+
+                            // Log to local file if path exists
+                            const storagePath = streamData.sessionPaths.get(sid);
+                            if (storagePath) {
+                                fileLogger.saveLogToFile(storagePath, sid, 'gift', { sender_name: data.nickname, content: giftName, quantity: repeatCount, raw: data });
+                            }
                         });
                     }
                 });
@@ -319,6 +370,20 @@ export const setupSockets = (io) => {
                 const streamData = activeTiktokStreams.get(username);
                 if (sessionId) {
                     streamData.sessionIds.add(sessionId);
+
+                    // Fetch storage path for this session if not cached
+                    if (!streamData.sessionPaths.has(sessionId)) {
+                        pool.query(`
+                            SELECT a.data_storage_path 
+                            FROM live_sessions ls
+                            JOIN tiktokers t ON t.id = ls.tiktoker_id
+                            JOIN accounts a ON a.id = t.account_id
+                            WHERE ls.id = $1
+                        `, [sessionId]).then(res => {
+                            const path = res.rows[0]?.data_storage_path;
+                            if (path) streamData.sessionPaths.set(sessionId, path);
+                        }).catch(e => console.error('[DB Error] Fetch storage path error:', e.message));
+                    }
 
                     // Nếu đã có thông tin room từ trước, cập nhật ngay cho session mới này
                     if (streamData.connection?.roomId) {
@@ -339,6 +404,7 @@ export const setupSockets = (io) => {
                         totalCoins: streamData.totalCoins,
                         chatCount: streamData.chatCount,
                         hostNickname: streamData.hostNickname,
+                        hostAvatar: streamData.hostAvatar,
                         hostFollowers: streamData.hostFollowers
                     });
                     io.to(socket.id).emit('chat_history', streamData.chats);
