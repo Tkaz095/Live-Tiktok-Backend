@@ -88,7 +88,8 @@ export const login = async (req, res) => {
                 email: account.email,
                 full_name: account.full_name,
                 role_id: account.role_id,
-                status: account.status
+                status: account.status,
+                data_storage_path: account.data_storage_path
             }
         });
     } catch (error) {
@@ -142,7 +143,7 @@ export const updatePassword = async (req, res) => {
 export const updateUser = async (req, res) => {
     try {
         const { id } = req.params;
-        const { full_name, email, role_id, status } = req.body;
+        const { full_name, email, role_id, status, data_storage_path } = req.body;
 
         // Kiểm tra account tồn tại
         const existing = await pool.query('SELECT id FROM accounts WHERE id = $1', [id]);
@@ -180,6 +181,7 @@ export const updateUser = async (req, res) => {
         if (email) { updates.push(`email = $${idx++}`); values.push(email); }
         if (role_id) { updates.push(`role_id = $${idx++}`); values.push(role_id); }
         if (status) { updates.push(`status = $${idx++}`); values.push(status); }
+        if (data_storage_path !== undefined) { updates.push(`data_storage_path = $${idx++}`); values.push(data_storage_path); }
 
         if (updates.length === 0) {
             return res.status(400).json({ error: 'Không có trường nào để cập nhật' });
@@ -188,7 +190,7 @@ export const updateUser = async (req, res) => {
         values.push(id);
         const result = await pool.query(
             `UPDATE accounts SET ${updates.join(', ')} WHERE id = $${idx} 
-             RETURNING id, username, email, full_name, role_id, status`,
+             RETURNING id, username, email, full_name, role_id, status, data_storage_path`,
             values
         );
 

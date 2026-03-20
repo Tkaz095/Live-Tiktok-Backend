@@ -26,7 +26,7 @@ export const getActiveStreams = async (req, res) => {
   try {
     const accountId = req.user.id;
     const result = await pool.query(
-      `SELECT ls.*, t.tiktok_handle, t.nickname 
+      `SELECT ls.*, t.tiktok_handle, t.nickname, t.avatar_url 
        FROM live_sessions ls
        JOIN tiktokers t ON t.id = ls.tiktoker_id
        WHERE t.account_id = $1 AND ls.status = 'online'`,
