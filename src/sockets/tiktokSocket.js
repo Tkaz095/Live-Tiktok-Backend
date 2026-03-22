@@ -3,6 +3,8 @@ import * as liveLogsService from '../services/liveLogs.service.js';
 import * as fileLogger from '../services/fileLogger.service.js';
 import pool from '../config/db.js';
 
+console.log('>>> TIKTOK SOCKET LOADED V3 <<<');
+
 export const setupSockets = (io) => {
     // Lưu trữ kết nối TikTok tập trung (Global), tránh bị trùng lặp kết nối và ban IP
     const activeTiktokStreams = new Map();
@@ -58,21 +60,30 @@ export const setupSockets = (io) => {
                     giftCache: {},
                     sessionIds: new Set(), // Bộ sưu tập sessionId đang theo dõi room này
                     chatCount: 0, // Tổng số chat (Baseline DB + Real-time)
-                    sessionPaths: new Map() // sessionId -> dataStoragePath
+                    sessionPaths: new Map(), // sessionId -> dataStoragePath
+                    sessionPlans: new Map() // sessionId -> subscriptionPlan
                 };
                 if (sessionId) {
                     streamData.sessionIds.add(sessionId);
                     // Fetch storage path for this session
                     pool.query(`
-                        SELECT a.data_storage_path 
+                        SELECT a.data_storage_path, a.role_id 
                         FROM live_sessions ls
                         JOIN tiktokers t ON t.id = ls.tiktoker_id
                         JOIN accounts a ON a.id = t.account_id
                         WHERE ls.id = $1
                     `, [sessionId]).then(res => {
                         const path = res.rows[0]?.data_storage_path;
-                        if (path) streamData.sessionPaths.set(sessionId, path);
-                    }).catch(e => console.error('[DB Error] Fetch storage path error:', e.message));
+                        const role_id = res.rows[0]?.role_id;
+                        const plan = role_id === 1 ? 'pro' : 'free';
+                        console.log(`[Socket Debug] Session: ${sessionId}, Path: ${path}, Role: ${role_id}, Plan: ${plan}`);
+                        if (path) {
+                            streamData.sessionPaths.set(sessionId, path);
+                            // Force folder creation immediately
+                            fileLogger.saveLogToFile(path, sessionId, 'member', { sender_name: 'System', content: 'Session started' });
+                        }
+                        streamData.sessionPlans.set(sessionId, plan);
+                    }).catch(e => console.error('[DB Error V3] Fetch storage path error:', e.message));
                 }
                 activeTiktokStreams.set(username, streamData);
 
@@ -199,12 +210,16 @@ export const setupSockets = (io) => {
 
                     // Log member join
                     streamData.sessionIds.forEach(sid => {
+                        const plan = streamData.sessionPlans.get(sid) || 'free';
+                        const shouldSaveToCloud = plan !== 'free';
+
                         liveLogsService.createLiveLog({
                             session_id: sid,
                             type: 'member',
                             sender_name: nickname,
                             content: 'vừa vào phòng',
-                            json_raw: data
+                            json_raw: data,
+                            shouldSaveToCloud
                         }).catch(e => console.error(`[Logging Error] Member for sid ${sid}:`, e.message));
 
                         // Log to local file if path exists
@@ -230,13 +245,17 @@ export const setupSockets = (io) => {
 
                         // Ghi log vào DB
                         streamData.sessionIds.forEach(sid => {
+                            const plan = streamData.sessionPlans.get(sid) || 'free';
+                            const shouldSaveToCloud = plan !== 'free';
+
                             liveLogsService.createLiveLog({
                                 session_id: sid,
                                 type: 'like',
                                 sender_name: data.nickname,
                                 content: `đã thả ${data.likeCount} tim`,
                                 quantity: data.likeCount,
-                                json_raw: data
+                                json_raw: data,
+                                shouldSaveToCloud
                             }).catch(e => console.error(`[Logging Error] Like for sid ${sid}:`, e.message));
 
                             // Log to local file if path exists
@@ -283,12 +302,16 @@ export const setupSockets = (io) => {
                     });
 
                     streamData.sessionIds.forEach(sid => {
+                        const plan = streamData.sessionPlans.get(sid) || 'free';
+                        const shouldSaveToCloud = plan !== 'free';
+
                         liveLogsService.createLiveLog({
                             session_id: sid,
                             type: 'chat',
                             sender_name: chatMsg.user,
                             content: chatMsg.message,
-                            json_raw: data
+                            json_raw: data,
+                            shouldSaveToCloud
                         }).catch(e => console.error(`[Logging Error] Chat for sid ${sid}:`, e.message));
 
                         // Log to local file if path exists
@@ -346,13 +369,17 @@ export const setupSockets = (io) => {
                     if (data.giftType !== 1 || data.repeatEnd) {
                         console.log(`[Logging Gift] Room: ${username}, Gift: ${giftName}, SessionIds:`, Array.from(streamData.sessionIds));
                         streamData.sessionIds.forEach(sid => {
+                            const plan = streamData.sessionPlans.get(sid) || 'free';
+                            const shouldSaveToCloud = plan !== 'free';
+
                             liveLogsService.createLiveLog({
                                 session_id: sid,
                                 type: 'gift',
                                 sender_name: data.nickname,
                                 content: giftName,
                                 quantity: repeatCount,
-                                json_raw: data
+                                json_raw: data,
+                                shouldSaveToCloud
                             }).catch(e => console.error(`[Logging Error] Gift for sid ${sid}:`, e.message));
 
                             // Log to local file if path exists
@@ -374,15 +401,18 @@ export const setupSockets = (io) => {
                     // Fetch storage path for this session if not cached
                     if (!streamData.sessionPaths.has(sessionId)) {
                         pool.query(`
-                            SELECT a.data_storage_path 
+                            SELECT a.data_storage_path, a.role_id 
                             FROM live_sessions ls
                             JOIN tiktokers t ON t.id = ls.tiktoker_id
                             JOIN accounts a ON a.id = t.account_id
                             WHERE ls.id = $1
                         `, [sessionId]).then(res => {
                             const path = res.rows[0]?.data_storage_path;
+                            const role_id = res.rows[0]?.role_id;
+                            const plan = role_id === 1 ? 'pro' : 'free';
                             if (path) streamData.sessionPaths.set(sessionId, path);
-                        }).catch(e => console.error('[DB Error] Fetch storage path error:', e.message));
+                            streamData.sessionPlans.set(sessionId, plan);
+                        }).catch(e => console.error('[DB Error V3] Fetch storage path error:', e.message));
                     }
 
                     // Nếu đã có thông tin room từ trước, cập nhật ngay cho session mới này

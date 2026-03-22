@@ -20,12 +20,22 @@ const ensureDir = (dirPath) => {
  */
 export const saveLogToFile = async (basePath, sessionId, type, data) => {
     if (!basePath) return;
+    
+    // Xử lý đường dẫn cho môi trường Linux/Render nếu cần
+    let finalPath = basePath;
+    if (process.platform !== 'win32' && basePath.includes(':')) {
+        // Nếu đang chạy trên Linux (Render) nhưng path lại là Windows (D:\...)
+        // Tránh lỗi ENOENT bằng cách chuyển về thư mục tương đối hoặc thư mục tạm trên Linux
+        finalPath = path.join(process.cwd(), 'data', 'logs');
+        console.warn(`[FileLogger] Path Windows không hợp lệ trên ${process.platform}. Chuyển hướng tới: ${finalPath}`);
+    }
 
-    // Chỉ lưu Chat và Gift theo yêu cầu mới
-    if (type !== 'chat' && type !== 'gift') return;
+    // Chỉ lưu Chat, Gift và Member Join theo yêu cầu mới
+    if (type !== 'chat' && type !== 'gift' && type !== 'member') return;
 
     try {
-        const sessionDir = path.join(basePath, `session_${sessionId}`);
+        const sessionDir = path.join(finalPath, `session_${sessionId}`);
+        console.log(`[FileLogger] Attempting to save to: ${sessionDir}`);
         ensureDir(sessionDir);
 
         let fileName;
@@ -37,7 +47,7 @@ export const saveLogToFile = async (basePath, sessionId, type, data) => {
             fileName = 'comments.json';
             logEntry = {
                 timestamp,
-                user: data.sender_name,
+                user: data.sender_name || data.nickname,
                 comment: data.content
             };
         } else if (type === 'gift') {
@@ -45,10 +55,18 @@ export const saveLogToFile = async (basePath, sessionId, type, data) => {
             // Dữ liệu quà tặng bắt buộc bóc tách: Tên User, Tên Quà, Số lượng, Số xu
             logEntry = {
                 timestamp,
-                user: data.sender_name,
+                user: data.sender_name || data.nickname,
                 gift: data.content,
                 quantity: data.quantity || 1,
-                coins: data.raw?.diamondCount || 0
+                coins: data.json_raw?.diamondCount || data.raw?.diamondCount || 0
+            };
+        } else if (type === 'member') {
+            fileName = 'session_info.json';
+            logEntry = {
+                timestamp,
+                user: data.sender_name || data.nickname,
+                status: 'joined',
+                details: data.content
             };
         }
 

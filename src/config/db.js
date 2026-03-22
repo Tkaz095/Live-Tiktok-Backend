@@ -29,6 +29,23 @@ export const connectDatabases = async () => {
         try {
             const client = await pool.connect();
             console.log('✅ [PostgreSQL] Kết nối thành công!');
+            
+            // Tự động tạo bảng live_logs nếu chưa có
+            const createTableSql = `
+                CREATE TABLE IF NOT EXISTS live_logs (
+                    id SERIAL PRIMARY KEY,
+                    session_id INTEGER REFERENCES live_sessions(id),
+                    type VARCHAR(50),
+                    sender_name VARCHAR(255),
+                    content TEXT,
+                    quantity INTEGER,
+                    json_raw JSONB,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            `;
+            await client.query(createTableSql);
+            console.log('✅ [PostgreSQL] Đã đảm bảo bảng live_logs tồn tại.');
+            
             client.release();
         } catch (error) {
             console.error('❌ [PostgreSQL] Kết nối thất bại:', error.message);
