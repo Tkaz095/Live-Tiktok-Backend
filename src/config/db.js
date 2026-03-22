@@ -6,11 +6,11 @@ const { Pool } = pg;
 
 // --- Cấu hình PostgreSQL ---
 const pool = new Pool({
-    user: process.env.DB_USER,
-    host: process.env.DB_HOST,
-    database: process.env.DB_NAME,
-    password: process.env.DB_PASSWORD,
-    port: process.env.DB_PORT || 5432,
+    // Ưu tiên dùng DATABASE_URL trên Render, nếu chạy ở máy cá nhân (Local) thì tự ghép chuỗi
+    connectionString: process.env.DATABASE_URL || `postgresql://${process.env.DB_USER}:${process.env.DB_PASSWORD}@${process.env.DB_HOST}:${process.env.DB_PORT}/${process.env.DB_NAME}`,
+    
+    // Bắt buộc bật SSL khi chạy trên môi trường Cloud (có DATABASE_URL)
+    ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false
 });
 
 pool.on('error', (err) => {
