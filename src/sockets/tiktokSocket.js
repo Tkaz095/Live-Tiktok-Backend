@@ -239,7 +239,7 @@ export const setupSockets = (io) => {
                             // Log to local file if path exists
                             const storagePath = streamData.sessionPaths.get(sid);
                             if (storagePath) {
-                                fileLogger.saveLogToFile(storagePath, sid, 'like', { sender_name: data.nickname, content: `đã thả ${data.likeCount} tim`, quantity: data.likeCount, raw: data });
+                                fileLogger.saveLogToFile(storagePath, sid, 'like', { sender_name: data.nickname, content: `đã thả ${data.likeCount} tim`, quantity: data.likeCount, raw: data }, username);
                             }
                         });
                     }

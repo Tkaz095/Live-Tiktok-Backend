@@ -30,8 +30,8 @@ export const saveLogToFile = async (basePath, sessionId, type, data, username = 
         console.warn(`[FileLogger] Path Windows không hợp lệ trên ${process.platform}. Chuyển hướng tới: ${finalPath}`);
     }
 
-    // Chỉ lưu Chat, Gift và Member Join theo yêu cầu mới
-    if (type !== 'chat' && type !== 'gift' && type !== 'member') return;
+    // Chỉ lưu Chat, Gift, Member Join và Like theo yêu cầu mới
+    if (type !== 'chat' && type !== 'gift' && type !== 'member' && type !== 'like') return;
 
     try {
         const dateStr = new Date().toISOString().split('T')[0];
@@ -69,6 +69,13 @@ export const saveLogToFile = async (basePath, sessionId, type, data, username = 
                 user: data.sender_name || data.nickname,
                 status: 'joined',
                 details: data.content
+            };
+        } else if (type === 'like') {
+            fileName = 'likes.json';
+            logEntry = {
+                timestamp,
+                user: data.sender_name || data.nickname,
+                quantity: data.quantity || 1
             };
         }
 

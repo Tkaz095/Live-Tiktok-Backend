@@ -11,12 +11,13 @@ const pool = new Pool({
     // Ưu tiên dùng DATABASE_URL trên Render, nếu chạy ở máy cá nhân (Local) thì tự ghép chuỗi
     connectionString: process.env.DATABASE_URL || `postgresql://${process.env.DB_USER}:${process.env.DB_PASSWORD}@${process.env.DB_HOST}:${process.env.DB_PORT}/${process.env.DB_NAME}`,
     
-    // Bắt buộc bật SSL khi chạy trên môi trường Cloud (có DATABASE_URL)
-    ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false
+    // Bắt buộc bật SSL khi chạy trên môi trường Cloud (chứ không chỉ khi có DATABASE_URL)
+    ssl: isLocal ? false : { rejectUnauthorized: false }
 });
 
 pool.on('error', (err) => {
-    console.error('❌ Lỗi kết nối PostgreSQL (Pool):', err.message);
+    console.error('❌ Lỗi kết nối PostgreSQL (Tiểu trình nền - Idle Client):', err.message);
+    // Tính năng an toàn: Tránh ứng dụng Nodejs sập hoàn toàn nếu Render tự động gắt kết nối
 });
 
 // --- Cấu hình MongoDB ---
