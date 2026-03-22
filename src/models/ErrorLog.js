@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 
 const ErrorLogSchema = new mongoose.Schema({
-    user_id: { type: Number, required: true },
+    user_id: { type: String, required: true },
     type: { type: String }, // 'API_ERROR', 'WS_ERROR', etc.
     message: { type: String, required: true },
     stack: { type: String },

@@ -10,7 +10,7 @@ import WebhookLog from '../models/WebhookLog.js';
 export const sendWebhook = async (userId, eventData) => {
     try {
         // Lấy webhook_url của user
-        const userRes = await pool.query('SELECT webhook_url FROM users WHERE id = $1 LIMIT 1', [userId]);
+        const userRes = await pool.query('SELECT webhook_url FROM accounts WHERE id = $1 LIMIT 1', [userId]);
         const webhookUrl = userRes.rows[0]?.webhook_url;
 
         if (!webhookUrl) {
