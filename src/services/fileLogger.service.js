@@ -18,7 +18,7 @@ const ensureDir = (dirPath) => {
  * - gift -> gifts.json (Bóc tách: Tên User, Tên Quà, Số lượng, Số xu)
  * Các loại khác (like, member, follow...) sẽ bị bỏ qua.
  */
-export const saveLogToFile = async (basePath, sessionId, type, data) => {
+export const saveLogToFile = async (basePath, sessionId, type, data, username = 'Unknown') => {
     if (!basePath) return;
     
     // Xử lý đường dẫn cho môi trường Linux/Render nếu cần
@@ -34,7 +34,9 @@ export const saveLogToFile = async (basePath, sessionId, type, data) => {
     if (type !== 'chat' && type !== 'gift' && type !== 'member') return;
 
     try {
-        const sessionDir = path.join(finalPath, `session_${sessionId}`);
+        const dateStr = new Date().toISOString().split('T')[0];
+        const folderName = `${username}_${dateStr}_ID${sessionId}`;
+        const sessionDir = path.join(finalPath, folderName);
         console.log(`[FileLogger] Attempting to save to: ${sessionDir}`);
         ensureDir(sessionDir);
 

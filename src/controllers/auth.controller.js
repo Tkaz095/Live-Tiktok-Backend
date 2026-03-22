@@ -19,11 +19,16 @@ export const register = async (req, res) => {
             return res.status(409).json({ error: 'Email hoặc Username đã tồn tại' });
         }
 
-        // Fetch Role Name mapped to ID
-        const targetRoleId = role_id || 2; 
-        const roleCheck = await pool.query('SELECT role_name FROM roles WHERE id = $1', [targetRoleId]);
-        const isRoleValid = roleCheck.rows.length > 0;
-        const finalRoleId = isRoleValid ? targetRoleId : 2; // fallback
+        // Lấy role_id mặc định (Customer) nếu không được gửi từ client
+        let finalRoleId = role_id;
+        if (!finalRoleId) {
+            const roleRes = await pool.query("SELECT id FROM roles WHERE role_name = 'Customer' LIMIT 1");
+            finalRoleId = roleRes.rows[0]?.id;
+        }
+
+        if (!finalRoleId) {
+            return res.status(500).json({ error: 'Không tìm thấy cấu hình phân quyền (roles) trong DB' });
+        }
 
         // Hash password
         const salt = await bcrypt.genSalt(10);

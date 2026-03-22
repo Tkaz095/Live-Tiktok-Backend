@@ -80,41 +80,15 @@ export const setupSockets = (io) => {
                         if (path) {
                             streamData.sessionPaths.set(sessionId, path);
                             // Force folder creation immediately
-                            fileLogger.saveLogToFile(path, sessionId, 'member', { sender_name: 'System', content: 'Session started' });
+                            fileLogger.saveLogToFile(path, sessionId, 'member', { sender_name: 'System', content: 'Session started' }, username);
                         }
                         streamData.sessionPlans.set(sessionId, plan);
                     }).catch(e => console.error('[DB Error V3] Fetch storage path error:', e.message));
                 }
                 activeTiktokStreams.set(username, streamData);
 
-                // Hàm kết nối TikTok với baseline từ DB
+                // Hàm kết nối TikTok (Không load baseline từ Postgres live_logs nữa)
                 const startConnection = async () => {
-                    // BƯỚC 1: Tải baseline từ DB TRƯỚC khi kết nối TikTok
-                    // Điều này đảm bảo room_info luôn có đúng dữ liệu lịch sử
-                    if (sessionId) {
-                        try {
-                            const res = await pool.query(`
-                                SELECT 
-                                    COALESCE(SUM(CASE WHEN type = 'gift' THEN ( (json_raw->>'diamondCount')::int * COALESCE((json_raw->>'count')::int, 1) ) ELSE 0 END), 0) as coins,
-                                    COALESCE(SUM(CASE WHEN type = 'like' THEN quantity ELSE 0 END), 0) as likes,
-                                    COUNT(CASE WHEN type = 'chat' THEN 1 END) as chats
-                                FROM live_logs 
-                                WHERE session_id = $1
-                            `, [sessionId]);
-                            const row = res.rows[0];
-                            if (row) {
-                                streamData.totalCoins = parseInt(row.coins || 0);
-                                streamData.likeBaseline = parseInt(row.likes || 0); // Lưu baseline riêng
-                                streamData.likeCount = streamData.likeBaseline;
-                                streamData.chatCount = parseInt(row.chats || 0);
-                                console.log(`[Baseline Loaded] Room: ${username}, Coins: ${streamData.totalCoins}, Likes: ${streamData.likeCount}, Chats: ${streamData.chatCount}`);
-                            }
-                        } catch (e) {
-                            console.error(`[Baseline Error] Room: ${username}:`, e.message);
-                        }
-                    }
-
-                    // BƯỚC 2: Sau khi có baseline, mới kết nối TikTok
                     try {
                         const state = await tiktokConnection.connect();
                         streamData.isConnecting = false;
@@ -131,38 +105,39 @@ export const setupSockets = (io) => {
                         streamData.hostAvatar = owner.avatar_thumb?.url_list?.[0] || null;
                         streamData.hostFollowers = owner.follow_info?.follower_count || null;
                         
-                        // Chỉ lấy viewerCount từ TikTok, KHÔNG ghi đè likeCount (đã có từ DB baseline)
                         streamData.viewerCount = state?.viewerCount || state?.roomInfo?.viewerCount || state?.roomInfo?.user_count || 0;
-                        // likeCount = DB_baseline (đã tích lũy + real-time từ trong phiên này)
-                        // KHÔNG làm: streamData.likeCount = state?.likeCount → sẽ reset về 0!
 
-                        // Cập nhật thông tin thực tế của phiên Live vào database
                         const roomId = state.roomId || state.roomInfo?.data?.id_str;
                         const liveTitle = state.roomInfo?.data?.title || 'TikTok Live';
+
+                        // [Sync Likes] Lấy số tim thực tế từ TikTok
+                        const tiktokTotalLikes = state?.roomInfo?.data?.stats?.like_count || 0;
+                        if (tiktokTotalLikes > streamData.likeCount) {
+                            streamData.likeCount = tiktokTotalLikes;
+                        }
                         
                         if (roomId && streamData.sessionIds.size > 0) {
                             const sessionIdsBatch = Array.from(streamData.sessionIds);
                             
-                            // 1. Cập nhật session room_id
+                            // 1. Cập nhật thông tin phiên live (ID là UUID)
                             pool.query(
                                 `UPDATE live_sessions 
                                  SET room_id = $1, live_title = $2 
-                                 WHERE id = ANY($3::int[])`,
+                                 WHERE id = ANY($3::uuid[])`,
                                 [roomId, liveTitle, sessionIdsBatch]
-                            ).catch(dbErr => console.error('[DB Error] Cập nhật session info thất bại:', dbErr));
+                            ).catch(dbErr => console.error('[DB Error] Update session info failed:', dbErr.message));
 
-                            // 2. Cập nhật thông tin Tiktoker (Avatar & Nickname thật)
+                            // 2. Cập nhật thông tin Tiktoker
                             pool.query(
                                 `UPDATE tiktokers 
                                  SET nickname = $1, avatar_url = $2 
                                  WHERE tiktok_handle = $3`,
                                 [streamData.hostNickname, streamData.hostAvatar, username]
-                            ).catch(dbErr => console.error('[DB Error] Cập nhật Tiktoker info thất bại:', dbErr));
+                            ).catch(dbErr => console.error('[DB Error] Update Tiktoker info failed:', dbErr.message));
                         }
 
-                        console.log(`Đã vào phòng của ${username}. Đang có ${streamData.viewerCount} người xem, ${streamData.likeCount} tim.`);
+                        console.log(`Đã vào phòng ${username}. Viewers: ${streamData.viewerCount}, Likes: ${streamData.likeCount}`);
                         
-                        // Gửi trạng thái (ĐÃ CÓ BASELINE) tới TOÀN BỘ client xem room này
                         io.to(username).emit('room_info', {
                             viewerCount: streamData.viewerCount,
                             likeCount: streamData.likeCount,
@@ -173,11 +148,11 @@ export const setupSockets = (io) => {
                             hostFollowers: streamData.hostFollowers
                         });
 
-                        // Gửi lịch sử chat
                         io.to(username).emit('chat_history', streamData.chats);
+
                     } catch (err) {
                         console.error(`Lỗi kết nối TikTok cho ${username}:`, err);
-                        io.to(username).emit('error', 'Không thể kết nối tới TikTok Live (Có thể Live đã tắt hoặc sai ID)');
+                        io.to(username).emit('error', 'Không thể kết nối tới TikTok Live');
                         activeTiktokStreams.delete(username);
                     }
                 };
@@ -225,17 +200,20 @@ export const setupSockets = (io) => {
                         // Log to local file if path exists
                         const storagePath = streamData.sessionPaths.get(sid);
                         if (storagePath) {
-                            fileLogger.saveLogToFile(storagePath, sid, 'member', { sender_name: nickname, content: 'vừa vào phòng', raw: data });
+                            fileLogger.saveLogToFile(storagePath, sid, 'member', { sender_name: nickname, content: 'vừa vào phòng', raw: data }, username);
                         }
                     });
                 });
 
                 tiktokConnection.on('like', (data) => {
-                    // Cộng số tim mới vào baseline (không ghi đè bằng totalLikeCount của TikTok
-                    // vì totalLikeCount chỉ tính từ đầu phiên kết nối, không tính lịch sử DB)
-                    if (data.likeCount > 0) {
+                    // Cập nhật số tim mới. Ưu tiên totalLikeCount của TikTok nếu nó lớn hơn
+                    if (data.totalLikeCount && data.totalLikeCount > streamData.likeCount) {
+                        streamData.likeCount = data.totalLikeCount;
+                    } else if (data.likeCount > 0) {
                         streamData.likeCount += data.likeCount;
+                    }
 
+                    if (data.likeCount > 0 || data.totalLikeCount > 0) {
                         // Phát sự kiện tới frontend
                         io.to(username).emit('like', {
                             user: data.nickname,
@@ -317,7 +295,7 @@ export const setupSockets = (io) => {
                         // Log to local file if path exists
                         const storagePath = streamData.sessionPaths.get(sid);
                         if (storagePath) {
-                            fileLogger.saveLogToFile(storagePath, sid, 'chat', { sender_name: chatMsg.user, content: chatMsg.message, raw: data });
+                            fileLogger.saveLogToFile(storagePath, sid, 'chat', { sender_name: chatMsg.user, content: chatMsg.message, raw: data }, username);
                         }
                     });
                 });
@@ -385,7 +363,7 @@ export const setupSockets = (io) => {
                             // Log to local file if path exists
                             const storagePath = streamData.sessionPaths.get(sid);
                             if (storagePath) {
-                                fileLogger.saveLogToFile(storagePath, sid, 'gift', { sender_name: data.nickname, content: giftName, quantity: repeatCount, raw: data });
+                                fileLogger.saveLogToFile(storagePath, sid, 'gift', { sender_name: data.nickname, content: giftName, quantity: repeatCount, raw: data }, username);
                             }
                         });
                     }
