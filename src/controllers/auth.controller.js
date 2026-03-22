@@ -30,10 +30,10 @@ export const register = async (req, res) => {
         const passwordHash = await bcrypt.hash(password, salt);
 
         const result = await pool.query(
-            `INSERT INTO accounts (username, email, password_hash, full_name, role_id) 
-             VALUES ($1, $2, $3, $4, $5) 
-             RETURNING id, username, email, full_name, role_id`,
-            [username, email, passwordHash, full_name || null, finalRoleId]
+            `INSERT INTO accounts (username, email, password_hash, full_name, role_id, data_storage_path) 
+             VALUES ($1, $2, $3, $4, $5, $6) 
+             RETURNING id, username, email, full_name, role_id, data_storage_path`,
+            [username, email, passwordHash, full_name || null, finalRoleId, 'C:\\Tiktok Monitor']
         );
 
         return res.status(201).json({ 
