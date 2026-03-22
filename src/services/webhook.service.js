@@ -1,5 +1,6 @@
 import axios from 'axios';
 import pool from '../config/db.js';
+import WebhookLog from '../models/WebhookLog.js';
 
 /**
  * Gửi webhook sự kiện (vd: quà, like) tới cấu hình webhook_url của User
@@ -36,12 +37,17 @@ export const sendWebhook = async (userId, eventData) => {
             console.error(`[Webhook] ❌ Lỗi gửi ${webhookUrl}:`, postError.message);
         }
 
-        // Lưu kết quả vào bảng webhook_logs
-        await pool.query(
-            `INSERT INTO webhook_logs (user_id, payload, response_code, response_body) 
-             VALUES ($1, $2, $3, $4)`,
-            [userId, JSON.stringify(eventData), statusCode, responseBody]
-        );
+        // Lưu kết quả vào MongoDB (CloudLogs)
+        try {
+            await WebhookLog.create({
+                user_id: userId,
+                payload: eventData,
+                response_code: statusCode,
+                response_body: responseBody
+            });
+        } catch (logError) {
+            console.error('[Webhook] Lỗi lưu WebhookLog vào MongoDB:', logError.message);
+        }
 
     } catch (dbError) {
         console.error('[Webhook] Lỗi Database trong quá trình bắn Webhook:', dbError);

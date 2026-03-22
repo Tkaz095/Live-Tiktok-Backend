@@ -1,5 +1,7 @@
 import pool from '../config/db.js';
 import { sendWebhook } from '../services/webhook.service.js';
+import WebhookLog from '../models/WebhookLog.js';
+import ErrorLog from '../models/ErrorLog.js';
 
 // GET /api/v1/logs/webhooks
 export const getWebhookLogs = async (req, res) => {
@@ -7,14 +9,13 @@ export const getWebhookLogs = async (req, res) => {
         const userId = req.user.id;
         const { limit = 50 } = req.query;
 
-        const result = await pool.query(
-            "SELECT * FROM webhook_logs WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2",
-            [userId, parseInt(limit, 10)]
-        );
+        const logs = await WebhookLog.find({ user_id: userId })
+            .sort({ created_at: -1 })
+            .limit(parseInt(limit, 10));
 
-        return res.json({ success: true, count: result.rowCount, data: result.rows });
+        return res.json({ success: true, count: logs.length, data: logs });
     } catch (error) {
-        console.error('Lỗi getWebhookLogs:', error);
+        console.error('Lỗi getWebhookLogs (MongoDB):', error);
         return res.status(500).json({ error: 'Lỗi máy chủ' });
     }
 };
@@ -25,14 +26,13 @@ export const getErrorLogs = async (req, res) => {
         const userId = req.user.id;
         const { limit = 50 } = req.query;
 
-        const result = await pool.query(
-            "SELECT * FROM error_logs WHERE user_id = $1 ORDER BY occurred_at DESC LIMIT $2",
-            [userId, parseInt(limit, 10)]
-        );
+        const logs = await ErrorLog.find({ user_id: userId })
+            .sort({ occurred_at: -1 })
+            .limit(parseInt(limit, 10));
 
-        return res.json({ success: true, count: result.rowCount, data: result.rows });
+        return res.json({ success: true, count: logs.length, data: logs });
     } catch (error) {
-        console.error('Lỗi getErrorLogs:', error);
+        console.error('Lỗi getErrorLogs (MongoDB):', error);
         return res.status(500).json({ error: 'Lỗi máy chủ' });
     }
 };

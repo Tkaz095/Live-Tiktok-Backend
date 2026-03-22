@@ -1,6 +1,7 @@
 import pool from '../config/db.js';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import fs from 'fs/promises';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_tiktok_key';
 
@@ -181,7 +182,20 @@ export const updateUser = async (req, res) => {
         if (email) { updates.push(`email = $${idx++}`); values.push(email); }
         if (role_id) { updates.push(`role_id = $${idx++}`); values.push(role_id); }
         if (status) { updates.push(`status = $${idx++}`); values.push(status); }
-        if (data_storage_path !== undefined) { updates.push(`data_storage_path = $${idx++}`); values.push(data_storage_path); }
+        if (data_storage_path !== undefined) { 
+            // Đảm bảo thư mục tồn tại nếu được cung cấp
+            if (data_storage_path) {
+                try {
+                    await fs.mkdir(data_storage_path, { recursive: true });
+                    console.log(`[Auth] Đã đảm bảo thư mục tồn tại: ${data_storage_path}`);
+                } catch (err) {
+                    console.error(`[Auth] Không thể tạo thư mục storage ${data_storage_path}:`, err);
+                    // Không chặn lưu nếu lỗi nhẹ, nhưng nếu là lỗi nghiêm trọng thì có thể báo lỗi
+                }
+            }
+            updates.push(`data_storage_path = $${idx++}`); 
+            values.push(data_storage_path); 
+        }
 
         if (updates.length === 0) {
             return res.status(400).json({ error: 'Không có trường nào để cập nhật' });
