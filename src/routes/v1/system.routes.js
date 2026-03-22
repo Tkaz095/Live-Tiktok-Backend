@@ -1,6 +1,6 @@
 
 import { Router } from 'express';
-import { selectDirectory } from '../../controllers/system.controller.js';
+import { selectDirectory, getDrives, listDirectory } from '../../controllers/system.controller.js';
 import { requireAuth } from '../../middlewares/auth.middleware.js';
 
 const router = Router();
@@ -19,5 +19,7 @@ const router = Router();
  *         description: OK
  */
 router.get('/select-directory', requireAuth, selectDirectory);
+router.get('/drives', requireAuth, getDrives);
+router.get('/list-directory', requireAuth, listDirectory);
 
 export default router;

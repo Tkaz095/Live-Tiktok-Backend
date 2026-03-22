@@ -1,4 +1,5 @@
 import pool from '../config/db.js';
+import CloudLog from '../models/CloudLog.js';
 
 // GET /api/v1/live-logs/session/:sessionId
 export const getSessionLogs = async (req, res) => {
@@ -18,21 +19,20 @@ export const getSessionLogs = async (req, res) => {
             return res.status(403).json({ error: 'Không có quyền truy cập session này' });
         }
 
-        let query = `SELECT * FROM live_logs WHERE session_id = $1`;
-        const params = [sessionId];
+        // Fetch from MongoDB
+        const filter = { session_id: parseInt(sessionId) };
+        if (type) filter.type = type;
 
-        if (type) {
-            query += ` AND type = $2`;
-            params.push(type);
-        }
+        const logs = await CloudLog.find(filter)
+            .sort({ created_at: 1 })
+            .limit(parseInt(limit))
+            .skip(parseInt(offset));
 
-        query += ` ORDER BY created_at ASC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
-        params.push(parseInt(limit), parseInt(offset));
+        const count = await CloudLog.countDocuments(filter);
 
-        const result = await pool.query(query, params);
-        res.json({ success: true, count: result.rowCount, data: result.rows });
+        res.json({ success: true, count, data: logs });
     } catch (error) {
-        console.error('Lỗi getSessionLogs:', error);
+        console.error('Lỗi getSessionLogs (MongoDB):', error);
         res.status(500).json({ error: 'Lỗi máy chủ' });
     }
 };
@@ -53,60 +53,78 @@ export const getSessionStats = async (req, res) => {
             return res.status(403).json({ error: 'Không có quyền truy cập session này' });
         }
 
-        // 1. Lấy Summary bằng SQL để đảm bảo tốc độ và chính xác
-        const summaryResult = await pool.query(`
-            SELECT 
-                COALESCE(SUM(
-                    CASE WHEN type = 'gift' THEN 
-                        COALESCE((json_raw->>'diamondCount')::int, (json_raw->'gift'->>'diamond_count')::int, 0) * 
-                        COALESCE((json_raw->>'repeatCount')::int, (json_raw->>'count')::int, quantity, 1)
-                    ELSE 0 END
-                ), 0) as total_coins,
-                COALESCE(SUM(CASE WHEN type = 'like' THEN quantity ELSE 0 END), 0) as total_likes,
-                COUNT(CASE WHEN type = 'chat' THEN 1 END) as total_chats,
-                COUNT(CASE WHEN type = 'member' THEN 1 END) as total_members
-            FROM live_logs 
-            WHERE session_id = $1
-        `, [sessionId]);
+        // 1. Lấy Summary bằng MongoDB Aggregation
+        const summaryResult = await CloudLog.aggregate([
+            { $match: { session_id: parseInt(sessionId) } },
+            {
+                $group: {
+                    _id: null,
+                    total_coins: {
+                        $sum: {
+                            $cond: [
+                                { $eq: ["$type", "gift"] },
+                                {
+                                    $multiply: [
+                                        { $ifNull: ["$json_raw.diamondCount", { $ifNull: ["$json_raw.gift.diamond_count", 0] }] },
+                                        { $ifNull: ["$json_raw.repeatCount", { $ifNull: ["$json_raw.count", { $ifNull: ["$quantity", 1] }] }] }
+                                    ]
+                                },
+                                0
+                            ]
+                        }
+                    },
+                    total_likes: { $sum: { $cond: [{ $eq: ["$type", "like"] }, "$quantity", 0] } },
+                    total_chats: { $sum: { $cond: [{ $eq: ["$type", "chat"] }, 1, 0] } },
+                    total_members: { $sum: { $cond: [{ $eq: ["$type", "member"] }, 1, 0] } }
+                }
+            }
+        ]);
 
-        const summary = {
-            total_coins: parseInt(summaryResult.rows[0].total_coins || 0),
-            total_likes: parseInt(summaryResult.rows[0].total_likes || 0),
-            total_chats: parseInt(summaryResult.rows[0].total_chats || 0),
-            total_members: parseInt(summaryResult.rows[0].total_members || 0)
-        };
+        const summary = summaryResult.length > 0 ? {
+            total_coins: summaryResult[0].total_coins,
+            total_likes: summaryResult[0].total_likes,
+            total_chats: summaryResult[0].total_chats,
+            total_members: summaryResult[0].total_members
+        } : { total_coins: 0, total_likes: 0, total_chats: 0, total_members: 0 };
         
-        // 2. Lấy Top Gifters cho phiên này (Sắp xếp theo Xu thay vì số lượng)
-        const topGiftersResult = await pool.query(`
-            SELECT 
-                sender_name, 
-                SUM(quantity) as gift_count,
-                SUM(
-                    COALESCE((json_raw->>'diamondCount')::int, (json_raw->'gift'->>'diamond_count')::int, 0) * 
-                    COALESCE((json_raw->>'repeatCount')::int, (json_raw->>'count')::int, quantity, 1)
-                ) as total_coins 
-            FROM live_logs 
-            WHERE session_id = $1 AND type = 'gift'
-            GROUP BY sender_name
-            ORDER BY total_coins DESC
-            LIMIT 10
-        `, [sessionId]);
-
-        const topGifters = topGiftersResult.rows.map(r => ({
-            sender_name: r.sender_name,
-            gift_count: parseInt(r.gift_count || 0),
-            total_coins: parseInt(r.total_coins || 0)
-        }));
+        // 2. Lấy Top Gifters bằng MongoDB Aggregation
+        const topGiftersResult = await CloudLog.aggregate([
+            { $match: { session_id: parseInt(sessionId), type: 'gift' } },
+            {
+                $group: {
+                    _id: "$sender_name",
+                    gift_count: { $sum: "$quantity" },
+                    total_coins: {
+                        $sum: {
+                            $multiply: [
+                                { $ifNull: ["$json_raw.diamondCount", { $ifNull: ["$json_raw.gift.diamond_count", 0] }] },
+                                { $ifNull: ["$json_raw.repeatCount", { $ifNull: ["$json_raw.count", { $ifNull: ["$quantity", 1] }] }] }
+                            ]
+                        }
+                    }
+                }
+            },
+            { $sort: { total_coins: -1 } },
+            { $limit: 10 },
+            {
+                $project: {
+                    _id: 0,
+                    sender_name: "$_id",
+                    gift_count: 1,
+                    total_coins: 1
+                }
+            }
+        ]);
 
         res.json({ 
             success: true, 
             data: {
                 summary,
-                top_gifters: topGifters
+                top_gifters: topGiftersResult
             } 
         });
     } catch (error) {
-        console.error('Lỗi getSessionStats:', error);
+        console.error('Lỗi getSessionStats (MongoDB):', error);
         res.status(500).json({ error: 'Lỗi máy chủ' });
     }
 };

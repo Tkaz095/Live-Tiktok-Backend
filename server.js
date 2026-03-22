@@ -1,13 +1,13 @@
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import app from './src/app.js';
-import { dbConnect } from './src/config/db.js';
+import { connectDatabases } from './src/config/db.js';
 import { setupSockets } from './src/sockets/tiktokSocket.js';
 
 // Cấu hình kết nối Database
 async function startServer() {
     try {
-        await dbConnect();
+        await connectDatabases();
 
         // Tạo HTTP Server từ Express App
         const httpServer = createServer(app);
