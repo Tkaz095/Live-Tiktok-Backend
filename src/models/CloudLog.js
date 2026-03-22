@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 
 const CloudLogSchema = new mongoose.Schema({
-    session_id: { type: Number, required: true },
+    session_id: { type: String, required: true },
     type: { type: String, required: true }, // 'chat', 'gift', 'like', 'member'
     sender_name: { type: String },
     content: { type: String },

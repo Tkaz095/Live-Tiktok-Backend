@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 
 const WebhookLogSchema = new mongoose.Schema({
-    user_id: { type: Number, required: true },
+    user_id: { type: String, required: true },
     payload: { type: mongoose.Schema.Types.Mixed },
     response_code: { type: Number },
     response_body: { type: String },

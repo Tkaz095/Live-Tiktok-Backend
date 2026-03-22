@@ -12,7 +12,7 @@ export const updateWebhook = async (req, res) => {
         }
 
         const result = await pool.query(
-            'UPDATE users SET webhook_url = $1 WHERE id = $2 RETURNING id, username, webhook_url',
+            'UPDATE accounts SET webhook_url = $1 WHERE id = $2 RETURNING id, username, webhook_url',
             [webhook_url, userId]
         );
 
@@ -40,27 +40,16 @@ export const getProfile = async (req, res) => {
         user: {
             id: req.user.id,
             username: req.user.username,
+            email: req.user.email,
+            full_name: req.user.full_name,
             webhook_url: req.user.webhook_url,
-            package_type: req.user.package_type
+            status: req.user.status,
+            data_storage_path: req.user.data_storage_path
         }
     });
 };
 
-// POST /api/v1/user/refresh-key
+// API Key đã được thay thế bằng JWT hoặc hệ thống xác thực khác
 export const refreshKey = async (req, res) => {
-    try {
-        const userId = req.user.id;
-        const newKey = crypto.randomUUID();
-
-        await pool.query('UPDATE users SET api_key = $1 WHERE id = $2', [newKey, userId]);
-
-        return res.json({ 
-            success: true, 
-            message: 'Đã tạo API Key mới thành công', 
-            api_key: newKey 
-        });
-    } catch (error) {
-        console.error('Lỗi refreshKey:', error);
-        return res.status(500).json({ error: 'Lỗi máy chủ' });
-    }
+    return res.status(501).json({ error: 'Tính năng API Key không còn được hỗ trợ.' });
 };

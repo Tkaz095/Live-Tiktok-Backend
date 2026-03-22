@@ -19,10 +19,10 @@ export const register = async (req, res) => {
             return res.status(409).json({ error: 'Email hoặc Username đã tồn tại' });
         }
 
-        // Lấy role_id mặc định (Customer) nếu không được gửi từ client
+        // Lấy role_id mặc định (User) nếu không được gửi từ client
         let finalRoleId = role_id;
         if (!finalRoleId) {
-            const roleRes = await pool.query("SELECT id FROM roles WHERE role_name = 'Customer' LIMIT 1");
+            const roleRes = await pool.query("SELECT id FROM roles WHERE role_name = 'User' LIMIT 1");
             finalRoleId = roleRes.rows[0]?.id;
         }
 
@@ -141,6 +141,39 @@ export const updatePassword = async (req, res) => {
         return res.json({ success: true, message: 'Đổi mật khẩu thành công' });
     } catch (error) {
         console.error('Lỗi updatePassword:', error);
+        return res.status(500).json({ error: 'Lỗi máy chủ' });
+    }
+};
+
+// PATCH /api/v1/auth/force-update-password/:id
+export const forceUpdatePassword = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { new_password } = req.body;
+
+        if (!new_password) {
+            return res.status(400).json({ error: 'Cần cung cấp mật khẩu mới' });
+        }
+
+        if (new_password.length < 6) {
+            return res.status(400).json({ error: 'Mật khẩu mới phải có ít nhất 6 ký tự' });
+        }
+
+        // Kiểm tra account tồn tại
+        const existing = await pool.query('SELECT id FROM accounts WHERE id = $1', [id]);
+        if (existing.rows.length === 0) {
+            return res.status(404).json({ error: 'Không tìm thấy tài khoản' });
+        }
+
+        // Hash mật khẩu mới
+        const salt = await bcrypt.genSalt(10);
+        const newHash = await bcrypt.hash(new_password, salt);
+
+        await pool.query('UPDATE accounts SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', [newHash, id]);
+
+        return res.json({ success: true, message: 'Ép đổi mật khẩu thành công' });
+    } catch (error) {
+        console.error('Lỗi forceUpdatePassword:', error);
         return res.status(500).json({ error: 'Lỗi máy chủ' });
     }
 };
