@@ -1,6 +1,5 @@
 import { WebcastPushConnection } from 'tiktok-live-connector';
 import * as liveLogsService from '../services/liveLogs.service.js';
-import * as fileLogger from '../services/fileLogger.service.js';
 import pool from '../config/db.js';
 
 console.log('>>> TIKTOK SOCKET LOADED V3 <<<');
@@ -8,6 +7,8 @@ console.log('>>> TIKTOK SOCKET LOADED V3 <<<');
 export const setupSockets = (io) => {
     // Lưu trữ kết nối TikTok tập trung (Global), tránh bị trùng lặp kết nối và ban IP
     const activeTiktokStreams = new Map();
+    const pendingCleanupTimers = new Map();
+    const STREAM_CLEANUP_GRACE_MS = 90000;
 
     io.on('connection', (socket) => {
         console.log(`Mới có người kết nối: ${socket.id}`);
@@ -32,6 +33,13 @@ export const setupSockets = (io) => {
             currentRoom = username;
             socket.join(username); // Socket tham gia phòng mang tên username
             console.log(`Socket ${socket.id} bắt đầu theo dõi TikTok Live của: ${username}`);
+
+            // Nếu room này đang chờ cleanup thì hủy vì đã có người vào lại.
+            const pendingTimer = pendingCleanupTimers.get(username);
+            if (pendingTimer) {
+                clearTimeout(pendingTimer);
+                pendingCleanupTimers.delete(username);
+            }
 
             // 1. KIỂM TRA: Nếu Backend chưa kết nối tới TikTok Live này thì tạo mới
             if (!activeTiktokStreams.has(username)) {
@@ -60,11 +68,14 @@ export const setupSockets = (io) => {
                     giftCache: {},
                     sessionIds: new Set(), // Bộ sưu tập sessionId đang theo dõi room này
                     chatCount: 0, // Tổng số chat (Baseline DB + Real-time)
-                    sessionPaths: new Map(), // sessionId -> dataStoragePath
-                    sessionPlans: new Map() // sessionId -> subscriptionPlan
+                    sessionPlans: new Map(), // sessionId -> subscriptionPlan
+                    reconnectAttempts: 0,
+                    reconnectTimer: null
                 };
                 if (sessionId) {
                     streamData.sessionIds.add(sessionId);
+                    // Default fallback to free until DB confirms exact role
+                    streamData.sessionPlans.set(sessionId, 'free');
                     // Fetch storage path for this session
                     pool.query(`
                         SELECT a.data_storage_path, a.role_id 
@@ -73,17 +84,14 @@ export const setupSockets = (io) => {
                         JOIN accounts a ON a.id = t.account_id
                         WHERE ls.id = $1
                     `, [sessionId]).then(res => {
-                        const path = res.rows[0]?.data_storage_path;
                         const role_id = res.rows[0]?.role_id;
                         const plan = role_id === 1 ? 'pro' : 'free';
-                        console.log(`[Socket Debug] Session: ${sessionId}, Path: ${path}, Role: ${role_id}, Plan: ${plan}`);
-                        if (path) {
-                            streamData.sessionPaths.set(sessionId, path);
-                            // Force folder creation immediately
-                            fileLogger.saveLogToFile(path, sessionId, 'member', { sender_name: 'System', content: 'Session started' }, username);
-                        }
+                        console.log(`[Socket Debug] Session: ${sessionId}, Role: ${role_id}, Plan: ${plan}`);
                         streamData.sessionPlans.set(sessionId, plan);
-                    }).catch(e => console.error('[DB Error V3] Fetch storage path error:', e.message));
+                    }).catch(e => {
+                        console.error('[DB Error V3] Fetch storage path error:', e.message);
+                        streamData.sessionPlans.set(sessionId, 'free');
+                    });
                 }
                 activeTiktokStreams.set(username, streamData);
 
@@ -92,6 +100,12 @@ export const setupSockets = (io) => {
                     try {
                         const state = await tiktokConnection.connect();
                         streamData.isConnecting = false;
+                        streamData.reconnectAttempts = 0;
+
+                        if (streamData.reconnectTimer) {
+                            clearTimeout(streamData.reconnectTimer);
+                            streamData.reconnectTimer = null;
+                        }
 
                         // Cache thông tin gifts
                         if (state?.availableGifts) {
@@ -152,23 +166,62 @@ export const setupSockets = (io) => {
 
                     } catch (err) {
                         console.error(`Lỗi kết nối TikTok cho ${username}:`, err);
-                        io.to(username).emit('error', 'Không thể kết nối tới TikTok Live');
-                        activeTiktokStreams.delete(username);
+                        streamData.isConnecting = false;
+                        io.to(username).emit('tiktok_error', 'Không thể kết nối tới TikTok Live, hệ thống đang thử kết nối lại...');
+                        scheduleReconnect('connect_failed');
                     }
                 };
 
-                startConnection();
+                const getRoomClientsCount = () => {
+                    const roomData = io.sockets.adapter.rooms.get(username);
+                    return roomData ? roomData.size : 0;
+                };
+
+                const scheduleReconnect = (reason) => {
+                    if (!activeTiktokStreams.has(username)) return;
+                    if (streamData.reconnectTimer) return;
+
+                    const clientsCount = getRoomClientsCount();
+                    if (clientsCount === 0) return;
+
+                    streamData.reconnectAttempts += 1;
+                    const delay = Math.min(3000 * streamData.reconnectAttempts, 15000);
+                    streamData.isConnecting = true;
+
+                    console.log(`[TikTok Reconnect] ${username} | reason=${reason} | attempt=${streamData.reconnectAttempts} | delay=${delay}ms`);
+
+                    streamData.reconnectTimer = setTimeout(() => {
+                        streamData.reconnectTimer = null;
+
+                        if (!activeTiktokStreams.has(username)) return;
+                        if (getRoomClientsCount() === 0) {
+                            streamData.isConnecting = false;
+                            return;
+                        }
+
+                        try {
+                            tiktokConnection.disconnect();
+                        } catch (_) {
+                            // ignore disconnect errors before reconnect
+                        }
+
+                        startConnection();
+                    }, delay);
+                };
 
                 // ====== HỨNG CÁC SỰ KIỆN TỪ TIKTOK VÀ BẮN VÀO ROOM ====== //
 
                 tiktokConnection.on('error', (err) => {
                     console.error(`[TikTok Error] Lỗi với ${username}:`, err.message || err);
                     io.to(username).emit('tiktok_error', 'Lỗi TikTok Live: ' + (err.message || 'Thử lại sau'));
+                    scheduleReconnect('connection_error');
                 });
 
                 tiktokConnection.on('disconnected', () => {
                     console.log(`[TikTok Disconnected] Mất kết nối tới ${username}.`);
                     io.to(username).emit('tiktok_disconnected', `Phiên kết nối của ${username} bị ngắt đột ngột từ TikTok`);
+                    streamData.isConnecting = true;
+                    scheduleReconnect('disconnected');
                 });
 
                 tiktokConnection.on('streamEnd', (actionId) => {
@@ -196,12 +249,6 @@ export const setupSockets = (io) => {
                             json_raw: data,
                             shouldSaveToCloud
                         }).catch(e => console.error(`[Logging Error] Member for sid ${sid}:`, e.message));
-
-                        // Log to local file if path exists
-                        const storagePath = streamData.sessionPaths.get(sid);
-                        if (storagePath) {
-                            fileLogger.saveLogToFile(storagePath, sid, 'member', { sender_name: nickname, content: 'vừa vào phòng', raw: data }, username);
-                        }
                     });
                 });
 
@@ -235,12 +282,6 @@ export const setupSockets = (io) => {
                                 json_raw: data,
                                 shouldSaveToCloud
                             }).catch(e => console.error(`[Logging Error] Like for sid ${sid}:`, e.message));
-
-                            // Log to local file if path exists
-                            const storagePath = streamData.sessionPaths.get(sid);
-                            if (storagePath) {
-                                fileLogger.saveLogToFile(storagePath, sid, 'like', { sender_name: data.nickname, content: `đã thả ${data.likeCount} tim`, quantity: data.likeCount, raw: data }, username);
-                            }
                         });
                     }
                 });
@@ -291,12 +332,6 @@ export const setupSockets = (io) => {
                             json_raw: data,
                             shouldSaveToCloud
                         }).catch(e => console.error(`[Logging Error] Chat for sid ${sid}:`, e.message));
-
-                        // Log to local file if path exists
-                        const storagePath = streamData.sessionPaths.get(sid);
-                        if (storagePath) {
-                            fileLogger.saveLogToFile(storagePath, sid, 'chat', { sender_name: chatMsg.user, content: chatMsg.message, raw: data }, username);
-                        }
                     });
                 });
 
@@ -359,15 +394,12 @@ export const setupSockets = (io) => {
                                 json_raw: data,
                                 shouldSaveToCloud
                             }).catch(e => console.error(`[Logging Error] Gift for sid ${sid}:`, e.message));
-
-                            // Log to local file if path exists
-                            const storagePath = streamData.sessionPaths.get(sid);
-                            if (storagePath) {
-                                fileLogger.saveLogToFile(storagePath, sid, 'gift', { sender_name: data.nickname, content: giftName, quantity: repeatCount, raw: data }, username);
-                            }
                         });
                     }
                 });
+
+                // Start connection after all listeners are attached to avoid missing early events.
+                startConnection();
             } 
             // 2. NẾU ĐÃ CÓ KẾT NỐI: Tức là client khác đã mở Live này trước đó
             else {
@@ -376,21 +408,23 @@ export const setupSockets = (io) => {
                 if (sessionId) {
                     streamData.sessionIds.add(sessionId);
 
-                    // Fetch storage path for this session if not cached
-                    if (!streamData.sessionPaths.has(sessionId)) {
+                    // Fetch subscription plan for this session if not cached
+                    if (!streamData.sessionPlans.has(sessionId)) {
+                        streamData.sessionPlans.set(sessionId, 'free');
                         pool.query(`
-                            SELECT a.data_storage_path, a.role_id 
+                            SELECT a.role_id 
                             FROM live_sessions ls
                             JOIN tiktokers t ON t.id = ls.tiktoker_id
                             JOIN accounts a ON a.id = t.account_id
                             WHERE ls.id = $1
                         `, [sessionId]).then(res => {
-                            const path = res.rows[0]?.data_storage_path;
                             const role_id = res.rows[0]?.role_id;
                             const plan = role_id === 1 ? 'pro' : 'free';
-                            if (path) streamData.sessionPaths.set(sessionId, path);
                             streamData.sessionPlans.set(sessionId, plan);
-                        }).catch(e => console.error('[DB Error V3] Fetch storage path error:', e.message));
+                        }).catch(e => {
+                            console.error('[DB Error V3] Fetch storage path error:', e.message);
+                            streamData.sessionPlans.set(sessionId, 'free');
+                        });
                     }
 
                     // Nếu đã có thông tin room từ trước, cập nhật ngay cho session mới này
@@ -431,8 +465,12 @@ export const setupSockets = (io) => {
 
         // Hàm kiểm tra xem còn Client nào xem phiên Live này không, nếu không thì kết thúc
         function checkCleanup(roomName) {
+            const existingTimer = pendingCleanupTimers.get(roomName);
+            if (existingTimer) clearTimeout(existingTimer);
+
             // Delay 1 chút để tránh trường hợp người dùng vừa bấm F5 bị sập stream ngay
-            setTimeout(() => {
+            const timer = setTimeout(() => {
+                pendingCleanupTimers.delete(roomName);
                 const roomData = io.sockets.adapter.rooms.get(roomName);
                 const clientsCount = roomData ? roomData.size : 0;
                 
@@ -440,11 +478,17 @@ export const setupSockets = (io) => {
                     console.log(`[-] Không còn ai xem ${roomName}. Đang đóng kết nối TikTok stream nhằm tiết kiệm RAM...`);
                     const streamData = activeTiktokStreams.get(roomName);
                     if (streamData && streamData.connection) {
+                        if (streamData.reconnectTimer) {
+                            clearTimeout(streamData.reconnectTimer);
+                            streamData.reconnectTimer = null;
+                        }
                         streamData.connection.disconnect();
                     }
                     activeTiktokStreams.delete(roomName);
                 }
-            }, 3000); // Đợi 3 giây trước khi thực sự ngắt (tăng thời gian đệm F5)
+            }, STREAM_CLEANUP_GRACE_MS); // Giữ stream trong một khoảng đệm khi người dùng chuyển trang ngắn hạn
+
+            pendingCleanupTimers.set(roomName, timer);
         }
     });
 

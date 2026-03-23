@@ -60,7 +60,12 @@ export const login = async (req, res) => {
             return res.status(400).json({ error: 'Cần username/email và password' });
         }
 
-        const result = await pool.query('SELECT * FROM accounts WHERE username = $1 OR email = $1 LIMIT 1', [username]);
+        const result = await pool.query(`
+            SELECT a.*, r.role_name 
+            FROM accounts a 
+            LEFT JOIN roles r ON a.role_id = r.id 
+            WHERE a.username = $1 OR a.email = $1 LIMIT 1
+        `, [username]);
         const account = result.rows[0];
 
         if (!account) {
@@ -79,7 +84,7 @@ export const login = async (req, res) => {
 
         // Tích hợp cho Web Frontend
         const token = jwt.sign(
-            { id: account.id, username: account.username, role_id: account.role_id }, 
+            { id: account.id, username: account.username, role_id: account.role_id, role_name: account.role_name }, 
             JWT_SECRET, 
             { expiresIn: '7d' }
         );
@@ -94,6 +99,7 @@ export const login = async (req, res) => {
                 email: account.email,
                 full_name: account.full_name,
                 role_id: account.role_id,
+                role_name: account.role_name,
                 status: account.status,
                 data_storage_path: account.data_storage_path
             }
